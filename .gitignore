@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# Environment Variables & Secrets
+.env
+.env.local
+*.env
+
+# ChromaDB & Vector Store Data
+chroma_db/
+*.chroma
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

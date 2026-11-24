@@ -71,10 +71,27 @@ flowchart TD
       "social": 5
     },
     "time_buckets": {
-      "slot_morning_08_12": 1,
-      "slot_afternoon_12_16": 3,
-      "slot_evening_16_20": 10,
-      "slot_night_20_24": 4
+      "slot_morning_06_12": 1,
+      "slot_afternoon_12_17": 3,
+      "slot_evening_17_21": 10,
+      "slot_night_21_06": 4
+    },
+    "days_of_week": {
+      "sunday": 3,
+      "monday": 1,
+      "tuesday": 2,
+      "wednesday": 0,
+      "thursday": 8,
+      "friday": 1,
+      "saturday": 0
+    },
+    "punctuality": {
+      "on_time": 11,
+      "late": 4
+    },
+    "streak": {
+      "current_streak": 3,
+      "longest_streak": 5
     },
     "total_attendances": 15,
     "last_active": "2026-11-20T19:30:00Z"

@@ -1,89 +1,136 @@
-# 📋 Slice 1: Data Contracts, Behavioral Counter Models & Time Buckets
+# 📋 Slice 1: Data Contracts, Core Schemas & Temporal Extraction
 
-> **Target:** Establish robust Pydantic v2 data models for Participants, Events, Entries, and Behavioral Stats, implement a deterministic Time Bucketing mechanism for activity time distribution, set up async MongoDB connectivity, and verify with automated pytest suites.
+> **Goal:** Establish Pydantic v2 data models for participants, events, entries, and behavioral counter stats—fully aligned with the existing MongoDB models (`tishrei-entry-backend`)—along with deterministic time-bucket and day-of-week extraction utilities and an asynchronous MongoDB connection layer.
 
 ---
 
 ## 🎯 1. Frame (Requirements & Boundaries)
 
-### 1.1 Data Models (Pydantic v2)
-* **`ParticipantStats`**:
-  * `categories: Dict[str, int]` - Frequency counter for each event category (default empty).
-  * `time_buckets: Dict[str, int]` - Frequency counter for each diurnal time slot (default empty).
-  * `total_attendances: int` - Total event participations counter (default 0).
-  * `last_active: Optional[datetime]` - Timestamp of most recent participation.
-* **`Participant`**:
-  * Fields matching MongoDB `participants` collection: `id` (as `PyObjectId`), `name`, `family`, `barcode`, `phone`, `city` (optional), `groupType`, `isApproved`.
-  * Behavioral stats: `stats: ParticipantStats` (default initialized).
-* **`Event`**:
-  * Fields matching MongoDB `events` collection: `id`, `name`, `date`, `description` (optional), `isActive`.
-  * Enriched classification: `category: Optional[str]`, `time_bucket: Optional[str]`.
-* **`Entry`**:
-  * Fields matching MongoDB `entries` collection: `id`, `participantId`, `eventId`, `scannerId`, `entryTime`, `method`.
+1. **System Schema Alignment (`tishrei-entry-backend`):**
+   - **`Participant`**:
+     - Core fields: `name`, `family`, `barcode`, `phone`, `email` (optional), `city` (optional), `schoolClass` (optional), `branch` (optional), `groupType` (`GroupType` enum string), `isApproved` (bool), `createdAt`, `updatedAt`.
+     - Behavioral extensions (`stats` subdocument, optional/default-safe).
+   - **`ParticipantStats` (Multi-Dimensional Counters):**
+     - `categories`: `Dict[str, int]` (counts per category ID, e.g. `sports`, `torah_study`).
+     - `time_buckets`: `Dict[str, int]` (counts per time slot, e.g. `morning_06_12`, `evening_17_21`).
+     - `days_of_week`: `Dict[str, int]` (counts per day name, e.g. `sunday`, `monday`, ..., `saturday`).
+     - `total_attendances`: `int` (total visits across all events).
+     - `last_active`: `Optional[datetime]` (most recent check-in timestamp).
+   - **`Event`**:
+     - `name`, `date`, `description` (optional), `isActive` (bool), `createdAt`, `updatedAt`.
+   - **`Entry`**:
+     - `participantId`, `eventId`, `scannerId`, `entryTime`, `method` (`barcode` | `manual`).
 
-### 1.2 Time Buckets Specification
-Deterministic segmentation of the 24-hour day into 4 practical operational windows:
-* `morning_06_12` (06:00 - 11:59)
-* `afternoon_12_17` (12:00 - 16:59)
-* `evening_17_21` (17:00 - 20:59)
-* `night_21_06` (21:00 - 05:59)
-* Function: `get_time_bucket(dt: datetime) -> str`
+2. **Deterministic Temporal Extraction Utilities:**
+   - `get_time_bucket(dt: datetime) -> str`:
+     - `morning_06_12` (06:00 - 11:59)
+     - `afternoon_12_17` (12:00 - 16:59)
+     - `evening_17_21` (17:00 - 20:59)
+     - `night_21_06` (21:00 - 05:59)
+   - `get_day_of_week(dt: datetime) -> str`:
+     - Standardized English lowercase day: `sunday`, `monday`, `tuesday`, `wednesday`, `thursday`, `friday`, `saturday`.
 
-### 1.3 Database Connectivity
-* Asynchronous MongoDB client setup using `motor.motor_asyncio.AsyncIOMotorClient`.
-* Pydantic configuration support for MongoDB `ObjectId` conversion (`PyObjectId` via `BeforeValidator` / `Annotated`).
+3. **Asynchronous MongoDB Access:**
+   - Motor (`AsyncIOMotorClient`) connection lifecycle with safe startup/shutdown events.
 
 ---
 
-## 🛠️ 2. File Structure & Responsibilities
+## 🛠️ 2. Plan (File Structure)
 
 ```text
 entry-recommendation-service/
 ├── app/
-│   ├── __init__.py
-│   ├── config.py                 # App settings (MONGODB_URI, DB_NAME)
-│   ├── database.py               # Async MongoDB client lifecycle
+│   ├── config.py                 # Settings (MONGODB_URI, DB_NAME, PORT)
+│   ├── database.py               # Motor async client & lifespan management
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── base.py               # PyObjectId type definition for MongoDB
-│   │   ├── stats.py              # ParticipantStats & TimeBucketEnum
-│   │   ├── participant.py        # ParticipantRead & ParticipantInDB
-│   │   ├── event.py              # EventRead & EventInDB
-│   │   └── entry.py              # EntryRead & EntryInDB
+│   │   ├── base.py               # PyObjectId (safe ObjectId serialization in Pydantic v2)
+│   │   ├── stats.py              # ParticipantStats, TimeBucketEnum, DayOfWeekEnum
+│   │   ├── participant.py        # ParticipantRead, ParticipantInDB, GroupTypeEnum
+│   │   ├── event.py              # EventRead, EventInDB
+│   │   └── entry.py              # EntryRead, EntryInDB
 │   └── classification/
 │       ├── __init__.py
-│       └── time_buckets.py       # get_time_bucket logic
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py               # Shared test fixtures & dummy documents
-│   ├── test_models.py            # Pydantic parsing & validation tests
-│   └── test_time_buckets.py      # Unit tests covering all 24 hours & edge cases
-├── requirements.txt              # pydantic, motor, pytest, etc.
-└── .env.example
+│       └── temporal.py           # get_time_bucket & get_day_of_week helpers
+└── tests/
+    ├── conftest.py               # Fixtures with realistic backend data mocks
+    └── test_slice1_contracts.py  # Unit tests for schemas & temporal calculation
 ```
 
 ---
 
-## 📐 3. Implementation Steps
+## 📝 3. Component Code Specifications
 
-1. **Environment & Dependencies:**
-   * Create `requirements.txt` with `pydantic>=2.7.0`, `motor>=3.4.0`, `pytest>=8.0.0`, `pytest-asyncio`, `python-dotenv`.
-2. **PyObjectId & Base Support (`app/models/base.py`):**
-   * Implement BSON `ObjectId` serialization/deserialization for Pydantic v2.
-3. **Behavioral Stats & Models (`app/models/`):**
-   * Define `ParticipantStats`, `Participant`, `Event`, `Entry`.
-4. **Time Bucketing Engine (`app/classification/time_buckets.py`):**
-   * Implement `get_time_bucket(dt: datetime) -> str` with rigorous boundary conditions.
-5. **Database Connector (`app/database.py`):**
-   * Async MongoDB connection lifecycle helper.
-6. **Automated Testing Suite (`tests/`):**
-   * Full test coverage for model serialization, schema validation, and hour boundary conditions.
+### A. Temporal Calculations (`temporal.py`)
+```python
+from datetime import datetime
+
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+def get_day_of_week(dt: datetime) -> str:
+    """Returns normalized lowercase day name: sunday..saturday."""
+    return DAYS[dt.weekday()]
+
+def get_time_bucket(dt: datetime) -> str:
+    """Maps a datetime to one of four deterministic daily slots."""
+    hour = dt.hour
+    if 6 <= hour < 12:
+        return "morning_06_12"
+    elif 12 <= hour < 17:
+        return "afternoon_12_17"
+    elif 17 <= hour < 21:
+        return "evening_17_21"
+    else:
+        return "night_21_06"
+```
+
+### B. Participant & Stats Schemas (`stats.py` & `participant.py`)
+```python
+from enum import Enum
+from typing import Dict, Optional
+from datetime import datetime
+from pydantic import BaseModel, Field
+from app.models.base import PyObjectId
+
+class GroupType(str, Enum):
+    HIGH_SCHOOL_FULL_MONTH = "תיכון תוכניות חודש מלא"
+    HIGH_SCHOOL_PARTIAL = "חודש חלקי (אחרי יו\"כ)"
+    APARTMENT_PLUS_PROGRAMS = "דירה + תוכניות"
+    SEMINAR_FULL_MONTH = "סמינר - תוכניות חודש מלא"
+    SEMINAR_AFTER_YOM = "סמינר - תוכניות אחרי יו\"כ"
+    WOMEN = "נשים"
+
+class ParticipantStats(BaseModel):
+    categories: Dict[str, int] = Field(default_factory=dict)
+    time_buckets: Dict[str, int] = Field(default_factory=dict)
+    days_of_week: Dict[str, int] = Field(default_factory=dict)
+    total_attendances: int = 0
+    last_active: Optional[datetime] = None
+
+class ParticipantRead(BaseModel):
+    id: PyObjectId = Field(alias="_id")
+    name: str
+    family: str
+    barcode: str
+    phone: str
+    email: Optional[str] = None
+    city: Optional[str] = None
+    school_class: Optional[str] = Field(default=None, alias="schoolClass")
+    branch: Optional[str] = None
+    group_type: str = Field(alias="groupType")
+    is_approved: bool = Field(default=False, alias="isApproved")
+    stats: ParticipantStats = Field(default_factory=ParticipantStats)
+    created_at: Optional[datetime] = Field(default=None, alias="createdAt")
+
+    class Config:
+        populate_by_name = True
+```
 
 ---
 
-## 🔍 4. Verification & Done Criteria
+## 🔍 4. Verification & Definition of Done
 
-- [ ] All models parse real sample JSON data from `tishrei-entry-backend` without errors.
-- [ ] `get_time_bucket` handles all edge timestamps (00:00, 05:59, 06:00, 11:59, 12:00, 16:59, 17:00, 20:59, 21:00, 23:59).
-- [ ] Pydantic serialization roundtrip maintains `ObjectId` consistency.
-- [ ] `pytest tests/` runs and passes with 100% green exit code.
+* [ ] **Backend Schema Fidelity:** Pydantic models can parse real participant JSON documents from `tishrei-entry-backend` without validation errors.
+* [ ] **Temporal Accuracy:** `get_time_bucket` and `get_day_of_week` produce 100% deterministic, accurate mappings across all 24 hours, edge bounds, and weekday transitions.
+* [ ] **Default Robustness:** Documents lacking the `stats` field automatically instantiate clean, empty default dictionaries.
+* [ ] **Pytest Verification:** `pytest tests/test_slice1_contracts.py` passes with 0 failures.

@@ -1,171 +1,206 @@
 # 🏗️ תוכנית על (Master Plan): שירות המלצות משתתפים לאירועים (`entry-recommendation-service`)
 
-> תוכנית לפרויקט גמר המיישמת את עקרונות הקורס (The 6-Step Loop, Vertical Slices, Vector Search, ChromaDB, AI Scoring, Grounded Generation, ואבטחה).
-> **הערה מרכזית:** המערכת אינה מקימה מחדש DB של משתמשים/אירועים/סריקות – כל הנתונים הבסיסיים מנוהלים כבר ב-`tishrei-entry-backend` (MongoDB).
+> תוכנית מעודכנת המבוססת על **פרופילי התנהגות מבוססי מונים (Feature & Buckets Counters)** ב-MongoDB, סיווג אירועים ע"י LLM, שליפה יעילה ודירוג/נימוק מותאם – ללא צורך ב-Vector DB (כמו ChromaDB) או Embeddings כבדים.
+> **הערה מרכזית:** הנתונים מנוהלים ב-`tishrei-entry-backend` (MongoDB). שירות ההמלצות מעדכן ומשתמש במוני הפעילות במסמכי המשתתפים.
 
 ---
 
-## 📐 ארכיטקטורת המערכת והשילוב עם הקיים
+## 💡 תפיסת הארכיטקטורה החדשה (Feature Counters)
+
+1. **סיווג אירועים חכם (LLM Event Categorization):**
+   * לכל אירוע (למשל: "טורניר קט-רגל ישיבתי") מופעל LLM שמחלץ קטגוריה ברורה (למשל `sports_football`, `shiur_torah`, `farbrengen`).
+   * בנוסף, מועד האירוע ממופה ל-**Time Bucket** (חלוקת היממה ל-N מקטעים קבועים, למשל בוקר, צהריים, ערב, לילה).
+2. **עדכון מונים במסמך המשתתף (Participant Behavioral Counters):**
+   * עם כל כניסה (Scan/Entry) של משתתף לאירוע, מתעדכן הפרופיל שלו ב-MongoDB:
+     * מונה לקטגוריה הספציפית (`stats.categories.<category> += 1`).
+     * מונה למקטע הזמן ביום (`stats.time_buckets.<bucket_id> += 1`).
+     * סך כל ההשתתפויות (`stats.total_attendances += 1`).
+3. **שליפת מועמדים ישירה מ-MongoDB (Filtering & Scoring):**
+   * כאשר מבקשים המלצות לאירוע חדש:
+     * ה-LLM מסווג את האירוע החדש לקטגוריה ולמקטע זמן.
+     * מריצים שאילתת MongoDB (Aggregation / Query) שמחפשת משתתפים עם התאמה גבוהה (ציון מבוסס מוני קטגוריה + מוני שעות).
+4. **דירוג ונימוק סופי (Grounded AI Scorer):**
+   * המועמדים המובילים (Top-K) מועברים ל-LLM קל עם הנתונים המדויקים ("השתתף 8 פעמים בכדורגל, 10 פעמים בשעות הערב").
+   * ה-LLM מייצר הסבר מנומק בעברית מדוע המשתתף מתאים לאירוע זה.
+
+---
+
+## 📐 תרשים זרימה (Flowchart)
 
 ```mermaid
 flowchart TD
-    subgraph ExistingSystem ["🏢 שרת קיים: tishrei-entry-backend (Node.js + MongoDB)"]
+    subgraph ExistingBackend ["🏢 Backend & MongoDB (tishrei-entry-backend)"]
         MongoDB[("💾 MongoDB\n(participants, events, entries)")]
-        NodeAPI["📡 Backend API\n(Port 3001)"]
+        NodeAPI["📡 Backend API"]
         MongoDB <--> NodeAPI
     end
 
-    subgraph NewService ["🆕 שירות חדש: entry-recommendation-service (FastAPI / Python)"]
-        Reader["📥 Data Ingestion / Sync\n(שליפת אירועים, משתתפים והיסטוריית כניסות)"]
-        ProfileEngine["🧠 Profile Engine\n(חישוב דטרמיניסטי של פרופילי נוכחות)"]
-        VectorStore["💾 ChromaDB (Vector Store)\n(Embeddings של פרופילי משתתפים)"]
-        RecService["🎯 Recommendation Engine\n(שליפה וקטורית Top-K)"]
-        AIScorer["🤖 AI Scorer / Filter\n(דירוג מנומק בעברית ע''י LLM)"]
-        RecAPI["🚀 Recommendation Endpoints\n(POST /recommendations/event/{id})"]
+    subgraph RecommendationService ["🆕 entry-recommendation-service (FastAPI / Python)"]
+        EventClassifier["🏷️ Event Classifier (LLM)\n(שיוך אירוע לקטגוריה + Time Bucket)"]
+        ProfileUpdater["📊 Profile Engine\n(עדכון מוני קטגוריות ושעות ב-MongoDB)"]
+        CandidateFinder["🔍 Mongo Candidate Retrieval\n(שליפת משתתפים מתאימים לפי מונים)"]
+        AIScorer["🤖 AI Scorer / Reasoner\n(דירוג ונימוק מבוסס נתונים בעברית)"]
+        RecAPI["🚀 Endpoints\n(POST /recommendations/event/{id})"]
     end
 
-    NodeAPI -.->|"1. שליפת היסטוריית כניסות ואירועים"| Reader
-    Reader --> ProfileEngine
-    ProfileEngine -->|"2. יצירת טקסט פרופיל ו-Embedding"| VectorStore
-    RecAPI -->|"3. בקשת המלצה לאירוע"| RecService
-    RecService -->|"4. חיפוש דמיון Top-K"| VectorStore
-    VectorStore -->|"5. מועמדים רלוונטיים"| RecService
-    RecService -->|"6. סינון + נימוק Grounded"| AIScorer
-    AIScorer -->|"7. תוצאה מדורגת עם הסברים"| RecAPI
+    NodeAPI -.->|"כניסה חדשה לאירוע"| ProfileUpdater
+    ProfileUpdater -->|"עדכון מונים $inc במסמך המשתתף"| MongoDB
+
+    RecAPI -->|"בקשת המלצה לאירוע"| EventClassifier
+    EventClassifier -->|"קטגוריה + Time Bucket"| CandidateFinder
+    CandidateFinder -->|"שאילתת מונגו לפי מונים"| MongoDB
+    MongoDB -->|"משתתפים בעלי ציון התאמה גבוה"| CandidateFinder
+    CandidateFinder -->|"Top-K מועמדים"| AIScorer
+    AIScorer -->|"רשימת מומלצים + נימוק מבוסס מונים"| RecAPI
 ```
 
 ---
 
-## 🗺️ מיפוי מושגי הקורס למערכת החדשה
+## 📊 מבנה הנתונים המוצע (Schema ב-MongoDB)
 
-| מושג מהקורס | מודול | איך מיושם בפרויקט |
-|---|---|---|
-| **The 6-Step Loop** | Module 02 | כל שלב מבוצע לפי: Frame → Plan → Prompt → Execute → Verify → Reflect |
-| **Vertical Slices** | Module 02 | חלוקה ל-Slices עצמאיים ברי בדיקה |
-| **Pydantic + FastAPI + DI** | Module 02, 05 | חוזי נתונים מדויקים, שימוש ב-`Depends()` והפרדת תלויות |
-| **Deterministic Profiling** | Module 02 | חישוב תפלגות זמנים, שעות מועדפות ואחוזי נוכחות ללא הזיות LLM |
-| **Embeddings & ChromaDB (HNSW)** | AIE 02 | אינדוקס פרופילי משתתפים בעזרת Sentence-Transformers |
-| **Hybrid Search (Dense + BM25)** | AIE 02 | התאמה בין מאפייני אירוע (תיאור, שעה, קהל יעד) לפרופיל המשתתף |
-| **Grounded Generation (PCTCO)** | AIE 01, 02 | פרומפט מוקפד שמחייב את ה-LLM להסביר על בסיס הנתונים בלבד |
-| **Rule-as-a-Test & Security** | Module 05 | בדיקות הרשאות (JWT של ה-Backend הקיים), ומניעת חריגות וציונים לא תקינים |
+במסמך של כל `participant`:
+```json
+{
+  "_id": "participant_obj_id",
+  "name": "ישראל ישראלי",
+  "email": "israel@example.com",
+  "stats": {
+    "categories": {
+      "sports_football": 8,
+      "shiur": 2,
+      "social": 5
+    },
+    "time_buckets": {
+      "slot_morning_08_12": 1,
+      "slot_afternoon_12_16": 3,
+      "slot_evening_16_20": 10,
+      "slot_night_20_24": 4
+    },
+    "total_attendances": 15,
+    "last_active": "2026-11-20T19:30:00Z"
+  }
+}
+```
 
 ---
 
-## 📁 מבנה הקבצים בשירות החדש
+## 📁 מבנה הקבצים המעודכן
 
 ```text
 entry-recommendation-service/
 ├── plans/                                # 📋 תוכניות עבודה
-│   ├── PLAN.md                           # ← תוכנית העל הראשית (קובץ זה)
-│   ├── slice-1-data-contract.md          # תוכנית מפורטת ל-Slice 1
-│   ├── slice-2-profile-engine.md         # תוכנית מפורטת ל-Slice 2
-│   ├── slice-3-vector-store.md           # תוכנית מפורטת ל-Slice 3
-│   ├── slice-4-ai-scorer.md              # תוכנית מפורטת ל-Slice 4
-│   ├── slice-5-recommendation-api.md     # תוכנית מפורטת ל-Slice 5
-│   └── slice-6-security-e2e.md           # תוכנית מפורטת ל-Slice 6
+│   ├── plan.md                           # ← תוכנית העל הראשית (קובץ זה)
+│   ├── slice-1-data-contract.md          # מודלים, חיבור ל-DB ו-Time Buckets
+│   ├── slice-2-event-classifier.md       # סיווג אירועים ע"י LLM
+│   ├── slice-3-profile-counters.md       # ניהול ועדכון מונים במסמך המשתתף
+│   ├── slice-4-mongo-retrieval.md        # שאילתות שליפת מועמדים לפי מונים
+│   ├── slice-5-ai-scorer.md              # דירוג ונימוק מבוסס Grounded Data
+│   └── slice-6-recommendation-api.md     # API מלא, אבטחה ובדיקות E2E
 │
 ├── app/
 │   ├── __init__.py
 │   ├── main.py                           # אפליקציית FastAPI
-│   ├── config.py                         # הגדרות (Pydantic BaseSettings)
-│   ├── clients/                          # ממשק מול השרת הקיים (MongoDB / Backend API)
+│   ├── config.py                         # הגדרות (Settings)
+│   ├── database.py                       # חיבור ל-MongoDB (Motor / PyMongo)
+│   ├── classification/                   # סיווג אירועים וחלוקת זמנים
 │   │   ├── __init__.py
-│   │   └── backend_client.py             # שליפת participants, events, entries
-│   ├── profiles/                         # מנוע חישוב הפרופילים
+│   │   ├── time_buckets.py               # מיפוי שעה למקטע זמן ביום
+│   │   └── classifier.py                 # LLM Event Categorizer
+│   ├── profiles/                         # ניהול פרופיל מונים
 │   │   ├── __init__.py
-│   │   ├── models.py                     # מודלי Pydantic לפרופיל
-│   │   └── engine.py                     # ProfileEngine - חישוב דטרמיניסטי והמרת פרופיל לטקסט
+│   │   ├── models.py                     # מודלי Pydantic לפרופיל ולסטטיסטיקות
+│   │   └── engine.py                     # עדכון מונים ב-DB ($inc)
 │   ├── recommendations/                  # מנוע ההמלצות
 │   │   ├── __init__.py
-│   │   ├── models.py                     # RecommendationRequest/Response
-│   │   ├── vector_store.py               # VectorStorePort + ChromaDBAdapter
-│   │   ├── ai_scorer.py                  # AIScorerPort + LLMScorer
-│   │   ├── prompts.py                    # תבניות פרומפט Grounded
+│   │   ├── models.py                     # RecommendationRequest / Response
+│   │   ├── mongo_retrieval.py            # שאילתות מונגו לשליפת מועמדים
+│   │   ├── ai_scorer.py                  # LLM Scorer & Reasoner
+│   │   ├── prompts.py                    # תבניות פרומפט
 │   │   └── service.py                    # RecommendationService (Orchestrator)
 │   └── routers/
 │       ├── __init__.py
-│       ├── health.py                     # בדיקת תקינות
-│       └── recommendations.py            # Endpoints של ההמלצות
+│       ├── health.py
+│       └── recommendations.py
 │
-├── tests/                                # בדיקות אוטומטיות (pytest)
-│   ├── conftest.py                       # Fixtures ו-Mocks
-│   ├── test_profile_engine.py
-│   ├── test_vector_store.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_time_buckets.py
+│   ├── test_event_classifier.py
+│   ├── test_profile_counters.py
+│   ├── test_mongo_retrieval.py
 │   ├── test_ai_scorer.py
 │   └── test_recommendation_flow.py
 │
-├── requirements.txt                      # תלויות פייתון
-└── .env.example                          # משתני סביבה לדוגמה
+├── requirements.txt
+└── .env.example
 ```
 
 ---
 
-## 🔪 תוכנית ה-Vertical Slices (סדר הפיתוח)
+## 🔄 פרוטוקול עבודה מחייב לכל שלב (Slice Workflow Protocol)
 
-> **הערה מתודית:** בכל שלב, לפני שכותבים קוד, מייצרים את ה-plan הספציפי שלו מתוך ההנחיות כאן (לדוגמה `slice-1-data-contract.md`), מריצים את הלופ, בודקים ומתקדמים.
-
----
-
-### 🔹 Slice 1: מודלים וסנכרון נתונים מול ה-Backend הקיים
-- **Frame:** הגדרת מודלי הנתונים (Pydantic) עבור המשתתפים, האירועים והכניסות כפי שהם קיימים ב-Node.js (`Participant`, `Event`, `Entry`).
-- **בנייה:** בניית `backend_client.py` שמתחבר ל-MongoDB הקיים (או מול ה-REST API של ה-Backend) לקריאת נתונים בלבד.
-- **Verify:** טסט שמוודא משיכה ומיפוי תקין של משתתפים וכניסות לתוך מודלי Pydantic.
+בכל מעבר לפיתוח שלב (Slice) חדש, נפעל לפי הנוהל המובנה הבא:
+1. **הצעת תוכנית בעברית:** הסוכן יציג הצעה מפורטת למימוש השלב (מטרות, רכיבים, קבצים ובדיקות).
+2. **דיון ודיוק משותף:** נדון על ההצעה, נשנה, נוסיף או נדייק דרישות בהתאם למשוב שלך.
+3. **יצירת קובץ Plan רשמי באנגלית:** רק לאחר אישורך המלא, נייצר/נעדכן את קובץ התוכנית הייעודי באנגלית (לדוגמה `plans/slice-1-data-contract.md`), ונפעל לפיו למימוש הקוד והבדיקות.
 
 ---
 
-### 🔹 Slice 2: Profile Engine (חישוב התנהגותי דטרמיניסטי)
-- **Frame:** חישוב תכונות התנהגותיות של כל משתתף על בסיס היסטוריית הכניסות (ללא AI):
-  - פילוח זמנים מועדפים (בוקר / צהריים / ערב).
-  - אחוז נוכחות כולל.
-  - סוגי אירועים מועדפים (לפי תיאור/שם האירוע).
-  - פונקציית `profile_to_text()` שממירה את הפרופיל לפסקה תיאורית עשירה לצורך Embedding.
-- **Verify:** בדיקות Unit מלאות על חישובי האחוזים, גבולות השעות והמרת הטקסט.
+## 🔪 תוכנית ה-Vertical Slices (שלבי הפיתוח)
 
----
-
-### 🔹 Slice 3: Vector Store (אינדוקס וחיפוש ב-ChromaDB)
-- **Frame:** הקמת מתאם ChromaDB ואחסון ה-Embeddings של המשתתפים.
+### 🔹 Slice 1: חוזי נתונים (Data Contracts) ומנגנון Time Buckets
+- **Frame:** הגדרת מודלי Pydantic למשתתפים, מונים, אירועים וסריקות.
 - **בנייה:**
-  - שימוש ב-Sentence-Transformers ליצירת וקטורים.
-  - שמירת metadata (עיר, קבוצה, אחוזי נוכחות).
-  - חיפוש דמיון קוסינוס (Cosine Similarity) לפי תיאור אירוע חדש.
-- **Verify:** בדיקות אינטגרציה: הוספת 5 פרופילים שונים, חיפוש אירוע ואימות שהמועמד הרלוונטי עולה בראש התוצאות (Top-K).
+  - פונקציה דטרמיניסטית `get_time_bucket(dt)` המחלקת את שעות היממה למקטעים (למשל: בוקר, צהריים, אחה"צ, ערב, לילה).
+  - חיבור נקי ל-MongoDB באמצעות Motor / PyMongo.
+- **Verify:** בדיקות יחידה על חישוב ה-buckets לפי שעות ותאריכים שונים.
 
 ---
 
-### 🔹 Slice 4: AI Scorer & Grounded Prompts
-- **Frame:** שכבת ה-LLM שמקבלת את האירוע ואת המועמדים מ-ChromaDB, ומבצעת דירוג סופי עם נימוק.
+### 🔹 Slice 2: סיווג אירועים ע"י LLM (Event Classifier)
+- **Frame:** יצירת מודול שמקבל שם אירוע ותיאור, ומסווג אותו לקטגוריה סטנדרטית (למשל: ספורט/כדורגל, שיעור תורה, פעילות חברתית, התוועדות).
 - **בנייה:**
-  - פרומפט Grounded לפי עקרונות PCTCO (הסבר אך ורק על סמך נתוני הפרופיל).
-  - קבלת ציון 0-100 והסבר בעברית.
-  - תמיכה ב-Mock Scorer לצורך טסטים מהירים וחסכוניים.
-- **Verify:** טסטים מול Mock LLM: ולידציית טווח ציונים (0-100), מבנה JSON תקין, והתמודדות עם היעדר נתונים.
+  - פרומפט מוגדר עם רשימת קטגוריות יעד קבועות (Enum / Taxonomies) ותמיכה בהרחבה.
+  - מימוש מנגנון Caching (כדי לא לסווג מחדש את אותו האירוע).
+  - תמיכה ב-Mock Classifier לטסטים ללא עלות API.
+- **Verify:** בדיקות עם אירועים מגוונים ובדיקת עמידות מול שמות קצרים או תיאורים חסרים.
 
 ---
 
-### 🔹 Slice 5: שירות ההמלצות המלא ו-FastAPI Endpoints
-- **Frame:** הרכבת הצינור המלא (`RecommendationService`):
-  1. קבלת `eventId`.
-  2. שליפת פרטי האירוע.
-  3. שליפת מועמדים מ-ChromaDB.
-  4. שליחה ל-AI Scorer.
-  5. החזרת רשימה מדורגת עם נימוקים.
-- **Verify:** בדיקת E2E של ה-endpoint: `POST /api/recommendations/events/{eventId}`.
-
----
-
-### 🔹 Slice 6: אבטחה, Rule-as-a-Test ובדיקות מערכת
-- **Frame:** נעילת השירות באבטחה מותאמת.
+### 🔹 Slice 3: ניהול ועדכון מוני הפרופיל (Profile Counters Engine)
+- **Frame:** לוגיקה לעדכון מוני המשתתף ב-MongoDB בעת רישום נוכחות באירוע.
 - **בנייה:**
-  - אימות טוקן JWT מול ה-`JWT_SECRET` המשותף של שרת ה-Backend.
-  - בדיקת הרשאות (רק משתמשים מורשים יכולים לבקש המלצות).
-  - ולידציות קלט למניעת הזרקות ושיבושים.
-- **Verify:** הרצת כל חבילת הבדיקות (`pytest`), בדיקת כיסוי ואימות פעולה חלקה.
+  - עדכון יעיל במונגו באמצעות `$inc` אטומי:
+    - הגדלת המונה לקטגוריית האירוע ב-1.
+    - הגדלת המונה ל-time bucket של מועד האירוע ב-1.
+    - הגדלת `total_attendances` ב-1 ועדכון `last_active`.
+  - פונקציית backfill / replay שתאפשר לחשב מונים רטרואקטיבית על כל היסטוריית ה-entries הקיימת.
+- **Verify:** בדיקות אינטגרציה: סריקת 3 אירועים ובדיקה שמסמך המשתתף ב-DB התעדכן במונים הנכונים.
 
 ---
 
-## 📌 איך ממשיכים מכאן?
-בכל שלב שתרצה להתחיל לפתח:
-1. נפנה ל-Slice הרלוונטי מהתוכנית הזו.
-2. נייצר קובץ plan מפורט (למשל `plans/slice-1-data-contract.md`).
-3. נממש, נריץ טסטים, ונוודא הצלחה לפני המעבר לשלב הבא!
+### 🔹 Slice 4: שליפת מועמדים מ-MongoDB (Candidate Retrieval)
+- **Frame:** שאילתת מונגו חכמה ויעילה שמוצאת את המשתתפים המתאימים ביותר לאירוע ספציפי.
+- **בנייה:**
+  - חישוב ציון התאמה משוקלל:
+    `Score = (Category_Counter * W_cat) + (Time_Bucket_Counter * W_time) + Recency_Bonus`
+  - שאילתת Mongo Aggregation שמחזירה את ה-Top K משתתפים (למשל 20 מועמדים).
+- **Verify:** בדיקת שאילתה מול מסד נתונים עם מספר משתתפים שונים, ווידוא שהמשתתף עם הנתונים המתאימים ביותר מופיע ראשון.
+
+---
+
+### 🔹 Slice 5: דירוג ונימוק סופי (AI Scorer & Reasoner)
+- **Frame:** שכבת ה-LLM שמקבלת את הנתונים העובדתיים של המועמדים ומייצרת הסבר אנושי ומשכנע בעברית.
+- **בנייה:**
+  - פרומפט Grounded המקבל את נתוני האירוע ואת המונים של המשתתף ("המשתתף נכח ב-8 אירועי כדורגל ופעיל בעיקר בשעות הערב").
+  - החזרת ציון מותאם והסבר ברור בעברית מדוע המשתתף מומלץ לאירוע זה.
+- **Verify:** בדיקות ולידציה של הפלט, וידוא שאין הזיות (ההסבר נשען ישירות על המונים שהוזנו).
+
+---
+
+### 🔹 Slice 6: API מלא, אבטחה ובדיקות E2E
+- **Frame:** חיבור כל הרכיבים ל-Endpoint של FastAPI (`POST /recommendations/event/{id}`).
+- **בנייה:**
+  - שילוב ה-Flow המלא: סיווג אירוע -> שליפת מועמדים ממונגו -> דירוג ונימוק ע"י LLM -> החזרת תשובה.
+  - אימות הרשאות ואבטחה (JWT Secret תואם ל-Backend הקיים).
+- **Verify:** בדיקת קצה-לקצה (E2E) של תהליך הבקשה והתשובה.

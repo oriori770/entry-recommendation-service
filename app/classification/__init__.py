@@ -4,6 +4,9 @@ from .taxonomy import CategoryDefinition, TenantConfig, EventClassificationResul
 from .classifier_port import EventClassifierPort
 from .mock_classifier import MockEventClassifier
 from .gemini_classifier import GeminiEventClassifier
+from .openai_classifier import OpenAIEventClassifier
+from .ollama_classifier import OllamaEventClassifier
+from .factory import get_event_classifier
 from .service import EventClassificationService
 
 __all__ = [
@@ -16,5 +19,8 @@ __all__ = [
     "EventClassifierPort",
     "MockEventClassifier",
     "GeminiEventClassifier",
+    "OpenAIEventClassifier",
+    "OllamaEventClassifier",
+    "get_event_classifier",
     "EventClassificationService"
 ]

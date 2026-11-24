@@ -4,11 +4,42 @@ from unittest.mock import AsyncMock
 from app.models.event import Event
 from app.classification.taxonomy import CategoryDefinition
 from app.classification.mock_classifier import MockEventClassifier
+from app.classification.gemini_classifier import GeminiEventClassifier
+from app.classification.openai_classifier import OpenAIEventClassifier
+from app.classification.ollama_classifier import OllamaEventClassifier
+from app.classification.factory import get_event_classifier
 from app.classification.service import EventClassificationService, DEFAULT_CATEGORIES
 
 @pytest.fixture
 def classifier():
     return MockEventClassifier()
+
+def test_classifier_factory_selection():
+    # Test local / ollama provider
+    ollama_c = get_event_classifier("ollama", model_name="mistral:latest")
+    assert isinstance(ollama_c, OllamaEventClassifier)
+    assert ollama_c.model_name == "mistral:latest"
+
+    local_c = get_event_classifier("local")
+    assert isinstance(local_c, OllamaEventClassifier)
+
+    # Test mock provider
+    mock_c = get_event_classifier("mock")
+    assert isinstance(mock_c, MockEventClassifier)
+
+    # Test gemini provider
+    gemini_c = get_event_classifier("gemini", model_name="gemini-1.5-pro")
+    assert isinstance(gemini_c, GeminiEventClassifier)
+    assert gemini_c.model_name == "gemini-1.5-pro"
+
+    # Test openai provider
+    openai_c = get_event_classifier("openai", model_name="gpt-4o")
+    assert isinstance(openai_c, OpenAIEventClassifier)
+    assert openai_c.model_name == "gpt-4o"
+
+    # Test fallback
+    default_c = get_event_classifier("unknown_provider")
+    assert isinstance(default_c, MockEventClassifier)
 
 @pytest.mark.asyncio
 async def test_classify_sports_event_dynamic(classifier):
@@ -23,7 +54,6 @@ async def test_classify_sports_event_dynamic(classifier):
 
 @pytest.mark.asyncio
 async def test_classify_custom_saas_tenant_categories(classifier):
-    # Custom tenant categories defined completely at runtime
     custom_categories = [
         CategoryDefinition(
             key="vr_zone",
@@ -59,7 +89,6 @@ async def test_classification_service_caching():
     mock_port = AsyncMock()
     service = EventClassificationService(classifier=mock_port)
 
-    # Event already has category -> should NOT call classifier
     event = Event(
         name="טורניר כדורגל",
         date=datetime.now(),
@@ -81,5 +110,4 @@ async def test_classification_service_invokes_and_caches_on_event(classifier):
     result = await service.get_or_classify_event(event)
     assert result.category_key == "farbrengen"
     assert result.display_name == "התוועדות חסידית"
-    # Check that event object was updated
     assert event.category == "farbrengen"

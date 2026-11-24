@@ -3,10 +3,11 @@ import json
 from typing import Optional, List
 from .classifier_port import EventClassifierPort
 from .taxonomy import CategoryDefinition, EventClassificationResult
+from .prompts import build_classification_system_prompt
 
 class GeminiEventClassifier(EventClassifierPort):
     """
-    Live Gemini LLM adapter for dynamic tenant-level event categorization.
+    Google Gemini LLM adapter.
     """
 
     def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-1.5-flash"):
@@ -20,28 +21,15 @@ class GeminiEventClassifier(EventClassifierPort):
         available_categories: Optional[List[CategoryDefinition]] = None
     ) -> EventClassificationResult:
         if not self.api_key:
-            raise ValueError("GEMINI_API_KEY is not configured")
+            return EventClassificationResult(
+                category_key="other",
+                display_name="אחר",
+                confidence=0.0,
+                reasoning="GEMINI_API_KEY is not configured"
+            )
 
         categories = available_categories or []
-        cat_descriptions = "\n".join([
-            f"- key: '{c.key}', label: '{c.display_name}', description: '{c.description}'"
-            for c in categories if c.is_active
-        ])
-
-        system_prompt = f"""
-You are an expert event categorization assistant.
-Select EXACTLY ONE category key from the available tenant categories below that best fits the event.
-
-Available Categories:
-{cat_descriptions}
-
-Respond with strictly valid JSON:
-{{
-  "category_key": "<selected key from above>",
-  "confidence": <float 0.0 to 1.0>,
-  "reasoning": "<short reasoning in Hebrew or English>"
-}}
-"""
+        system_prompt = build_classification_system_prompt(categories)
 
         try:
             import google.generativeai as genai
@@ -72,5 +60,5 @@ Respond with strictly valid JSON:
                 category_key="other",
                 display_name="אחר",
                 confidence=0.0,
-                reasoning=f"LLM classification failed: {str(e)}"
+                reasoning=f"Gemini classification error: {str(e)}"
             )
